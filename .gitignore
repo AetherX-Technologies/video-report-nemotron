@@ -1,0 +1,26 @@
+.DS_Store
+__pycache__/
+.pytest_cache/
+.venv*/
+*.pyc
+
+# Local secrets and runtime configuration.
+.env
+*.env
+!*.env.example
+
+# Downloaded or normalized media can be large and may be copyrighted.
+*.wav
+*.aiff
+*.mp3
+*.mp4
+*.m4a
+*.webm
+*.mov
+*.part
+*.tmp
+
+# Model/runtime caches.
+.cache/
+models/
+hf_cache/

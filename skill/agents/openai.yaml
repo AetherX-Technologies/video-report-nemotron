@@ -1,0 +1,6 @@
+interface:
+  display_name: "Video Report Nemotron"
+  short_description: "Local video transcription and reports"
+  default_prompt: "Use $video-report-nemotron to transcribe this video and generate a Markdown report."
+policy:
+  allow_implicit_invocation: true
