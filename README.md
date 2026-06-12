@@ -8,7 +8,7 @@ Video Report Nemotron is a Hermes skill for turning video links or local media f
 
 ## Highlights
 
-- Works with YouTube, Bilibili, other `yt-dlp` supported URLs, and local audio/video files.
+- Works with YouTube, local audio/video files, and other `yt-dlp` supported URLs when subtitles or media extraction are available.
 - Uses existing subtitles before local ASR, which keeps many URL reports fast and cheap.
 - Uses Nemotron ASR only for subtitle fallback. The bundled local backend is Apple Silicon MLX with `mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit`.
 - Does not fall back to Whisper-family ASR. Other platforms can use subtitle-first reports today and need an explicit Nemotron backend for local ASR.

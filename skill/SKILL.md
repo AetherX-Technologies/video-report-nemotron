@@ -1,6 +1,6 @@
 ---
 name: video-report-nemotron
-description: "Use when the user gives a YouTube, Bilibili, or other video URL or local media file and wants a transcript, summary, chapters, action items, visual evidence, or Markdown/HTML/PDF report. Prefers existing subtitles, then falls back to Nemotron ASR."
+description: "Use when the user gives a YouTube or other supported video URL or local media file and wants a transcript, summary, chapters, action items, visual evidence, or Markdown/HTML/PDF report. Prefers existing subtitles, then falls back to Nemotron ASR."
 platforms: [macos, linux, windows]
 ---
 
@@ -65,7 +65,7 @@ The Apple Silicon ASR profile uses `mlx-community/nemotron-3.5-asr-streaming-0.6
 
 ```bash
 python3 SKILL_DIR/scripts/video_report.py "https://www.youtube.com/watch?v=VIDEO_ID"
-python3 SKILL_DIR/scripts/video_report.py "https://www.bilibili.com/video/BV..." --language zh-CN
+python3 SKILL_DIR/scripts/video_report.py "https://example.com/video" --language zh-CN
 python3 SKILL_DIR/scripts/video_report.py ./meeting.mp4 --title "Team meeting" --output-dir ./reports
 python3 SKILL_DIR/scripts/video_report.py ./audio.wav --skip-summary --format json
 ```

@@ -8,7 +8,7 @@ Video Report Nemotron 是一个 Hermes skill，用来把视频链接或本地音
 
 ## 核心能力
 
-- 支持 YouTube、Bilibili、其他 `yt-dlp` 支持的视频 URL，以及本地音视频文件。
+- 支持 YouTube、本地音视频文件，以及其他在当前环境里能正常获取字幕或媒体的 `yt-dlp` 支持 URL。
 - 默认优先读取已有字幕，避免不必要的本机转录。
 - 本机 ASR 只使用 Nemotron。当前仓库自带的本地后端是 Apple Silicon MLX：`mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit`。
 - 不会偷偷回退到 Whisper / faster-whisper。Linux 或 Windows 可以先走字幕优先链路；如果要本地 ASR，需要接入明确的 Nemotron 后端。
