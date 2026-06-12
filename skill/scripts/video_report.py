@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
+import platform
 import re
 import shutil
 import subprocess
@@ -18,9 +20,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 
-DEFAULT_MODEL = "mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit"
+DEFAULT_MLX_MODEL = "mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit"
+DEFAULT_MODEL = DEFAULT_MLX_MODEL
 SUPPORTED_FORMATS = ("markdown", "json", "both")
 TRANSCRIPT_SOURCES = ("auto", "subtitles", "asr")
+ASR_BACKENDS = ("auto", "mlx-nemotron")
 
 
 @dataclass
@@ -45,20 +49,159 @@ class ProcessingResult:
     artifacts: ArtifactPaths
 
 
+def parse_env_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def load_env_file(path: Path, *, override: bool = False) -> bool:
+    if not path.exists():
+        return False
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key and (override or key not in os.environ):
+            os.environ[key] = parse_env_value(value)
+    return True
+
+
+def candidate_env_files(explicit_env_file: str | None) -> list[Path]:
+    script_root = Path(__file__).resolve().parents[1]
+    candidates: list[Path] = []
+    if explicit_env_file:
+        candidates.append(Path(explicit_env_file).expanduser())
+    candidates.extend(
+        [
+            Path.cwd() / ".env",
+            script_root / ".env",
+            Path.home() / ".config" / "video-report-nemotron" / ".env",
+        ]
+    )
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve() if candidate.exists() else candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(candidate)
+    return unique
+
+
+def load_env_from_argv(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--env-file")
+    known, _ = parser.parse_known_args(argv)
+    explicit_path = Path(known.env_file).expanduser() if known.env_file else None
+    for env_path in candidate_env_files(known.env_file):
+        load_env_file(env_path, override=explicit_path is not None and env_path == explicit_path)
+
+
+def current_python_has_mlx_audio() -> bool:
+    try:
+        from mlx_audio.stt import load  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+def python_has_mlx_audio(python_executable: Path) -> bool:
+    if not python_executable.exists() or not os.access(python_executable, os.X_OK):
+        return False
+    if python_executable.resolve() == Path(sys.executable).resolve():
+        return current_python_has_mlx_audio()
+    process = subprocess.run(
+        [str(python_executable), "-c", "from mlx_audio.stt import load"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+    return process.returncode == 0
+
+
+def candidate_python_executables() -> list[Path]:
+    script_root = Path(__file__).resolve().parents[1]
+    candidates: list[Path] = []
+    for env_name in ("VIDEO_REPORT_PYTHON", "HERMES_VIDEO_REPORT_PYTHON"):
+        configured = os.environ.get(env_name)
+        if configured:
+            candidates.append(Path(configured).expanduser())
+    for root in (Path.cwd(), script_root, script_root.parent):
+        candidates.extend(
+            [
+                root / ".venv-nemotron" / "bin" / "python",
+                root / ".venv" / "bin" / "python",
+            ]
+        )
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve() if candidate.exists() else candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(candidate)
+    return unique
+
+
+def requested_asr_backend_from_argv(argv: list[str] | None = None) -> str:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--asr-backend", default=os.environ.get("ASR_BACKEND", "auto"))
+    known, _ = parser.parse_known_args(argv)
+    return str(known.asr_backend or "auto")
+
+
+def maybe_reexec_for_local_mlx(argv: list[str] | None = None) -> None:
+    if os.environ.get("VIDEO_REPORT_REEXECED_FOR_MLX") == "1":
+        return
+    if platform.system() != "Darwin" or platform.machine().lower() not in {"arm64", "aarch64"}:
+        return
+    if requested_asr_backend_from_argv(argv) not in {"auto", "mlx-nemotron"}:
+        return
+    if current_python_has_mlx_audio():
+        return
+    for python_executable in candidate_python_executables():
+        if python_has_mlx_audio(python_executable):
+            env = os.environ.copy()
+            env["VIDEO_REPORT_REEXECED_FOR_MLX"] = "1"
+            os.execve(str(python_executable), [str(python_executable), str(Path(__file__).resolve()), *sys.argv[1:]], env)
+
+
 def parse_args() -> argparse.Namespace:
+    load_env_from_argv(sys.argv[1:])
+    maybe_reexec_for_local_mlx(sys.argv[1:])
     parser = argparse.ArgumentParser(
-        description="Get subtitles when available, otherwise transcribe with MLX Nemotron ASR, and write report artifacts."
+        description="Get subtitles when available, otherwise transcribe with a selected ASR backend, and write report artifacts."
     )
     parser.add_argument("source", help="Video/audio URL or local media file path.")
     parser.add_argument(
+        "--asr-backend",
+        choices=ASR_BACKENDS,
+        default=os.environ.get("ASR_BACKEND", "auto"),
+        help="ASR backend for subtitle fallback: auto or mlx-nemotron.",
+    )
+    parser.add_argument(
         "--model",
-        default=DEFAULT_MODEL,
-        help=f"MLX ASR model repository. Default: {DEFAULT_MODEL}",
+        default=None,
+        help=(
+            "ASR model override. For mlx-nemotron this is a Hugging Face MLX repo."
+        ),
     )
     parser.add_argument(
         "--language",
         default=None,
-        help="Optional Nemotron language prompt, for example en-US or zh-CN.",
+        help="Optional language hint, for example en-US, zh-CN, ja, or fr-FR.",
     )
     parser.add_argument(
         "--title",
@@ -97,10 +240,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keep downloaded and normalized audio files in the output directory.",
     )
+    parser.add_argument("--env-file", default=None, help="Optional .env file for provider settings.")
     parser.add_argument(
         "--att-context-size",
         default=None,
-        help="Optional Nemotron look-ahead as LEFT,RIGHT, for example 56,13.",
+        help="Optional MLX/Nemotron look-ahead as LEFT,RIGHT, for example 56,13.",
     )
     parser.add_argument(
         "--chunk-seconds",
@@ -161,10 +305,33 @@ def source_title(source: str, explicit_title: str | None) -> str:
     if explicit_title:
         return explicit_title
     if is_url(source):
+        fetched_title = fetch_url_title(source)
+        if fetched_title:
+            return fetched_title
         parsed = urlparse(source)
         path_name = parsed.path.rstrip("/").split("/")[-1]
         return " - ".join(part for part in (parsed.netloc, path_name) if part)
     return Path(source).stem
+
+
+def fetch_url_title(url: str) -> str | None:
+    process = run_optional_command(
+        [
+            "yt-dlp",
+            "--no-playlist",
+            "--no-warnings",
+            "--print",
+            "%(title)s",
+            url,
+        ]
+    )
+    if process.returncode != 0:
+        return None
+    for line in process.stdout.splitlines():
+        title = line.strip()
+        if title:
+            return title
+    return None
 
 
 def download_audio(url: str, workdir: Path) -> Path:
@@ -196,7 +363,7 @@ def default_subtitle_languages(language: str | None) -> str:
         if prefix == "zh":
             return "zh.*,zh-Hans,zh-Hant,zh-CN,zh-TW,en.*"
         return f"{normalized},{prefix}.*,en.*,zh.*"
-    return "zh.*,zh-Hans,zh-Hant,zh-CN,zh-TW,en.*"
+    return "en.*,en,zh.*,zh-Hans,zh-Hant,zh-CN,zh-TW.*"
 
 
 def parse_vtt_timestamp(value: str) -> float:
@@ -434,7 +601,39 @@ def parse_att_context_size(value: str | None) -> list[int] | None:
         raise SystemExit("--att-context-size values must be integers.") from exc
 
 
-def transcribe_with_python_api(
+def default_asr_model(backend: str) -> str:
+    if backend == "mlx-nemotron":
+        return os.environ.get("MLX_ASR_MODEL", DEFAULT_MLX_MODEL)
+    raise RuntimeError(f"Unsupported ASR backend: {backend}")
+
+
+def resolve_model_name(backend: str, model: str | None) -> str:
+    if model:
+        return model
+    return default_asr_model(backend)
+
+
+def host_prefers_mlx() -> bool:
+    return platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+
+
+def has_mlx_audio() -> bool:
+    return current_python_has_mlx_audio()
+
+
+def resolve_asr_backend(backend: str) -> str:
+    if backend != "auto":
+        return backend
+    if host_prefers_mlx() and has_mlx_audio():
+        return "mlx-nemotron"
+    raise RuntimeError(
+        "No Nemotron ASR backend is available. Install mlx-audio for the current Apple Silicon path "
+        'with: pip install "git+https://github.com/Blaizzy/mlx-audio.git". '
+        "Do not fall back to non-Nemotron ASR for this skill."
+    )
+
+
+def transcribe_with_mlx_nemotron(
     audio_path: Path,
     *,
     model_name: str,
@@ -465,7 +664,7 @@ def transcribe_with_python_api(
     return str(text).strip()
 
 
-def transcribe_with_cli(audio_path: Path, *, model_name: str) -> str:
+def transcribe_with_mlx_cli(audio_path: Path, *, model_name: str) -> str:
     command = [
         sys.executable,
         "-m",
@@ -481,25 +680,17 @@ def transcribe_with_cli(audio_path: Path, *, model_name: str) -> str:
     return process.stdout.strip()
 
 
-def transcribe_audio(
-    audio_path: Path,
+def transcribe_chunk(
+    chunk_path: Path,
     *,
+    backend: str,
     model_name: str,
     language: str | None,
     att_context_size: list[int] | None,
-    chunk_seconds: int,
 ) -> str:
-    chunks = split_audio(audio_path, audio_path.parent, chunk_seconds)
-    transcripts: list[str] = []
-    for index, (chunk_path, start, end) in enumerate(chunks, start=1):
-        print(
-            f"Transcribing chunk {index}/{len(chunks)} "
-            f"[{format_timestamp(start)}-{format_timestamp(end)}]",
-            file=sys.stderr,
-            flush=True,
-        )
+    if backend == "mlx-nemotron":
         try:
-            chunk_transcript = transcribe_with_python_api(
+            return transcribe_with_mlx_nemotron(
                 chunk_path,
                 model_name=model_name,
                 language=language,
@@ -509,9 +700,38 @@ def transcribe_audio(
             if language or att_context_size:
                 raise
             try:
-                chunk_transcript = transcribe_with_cli(chunk_path, model_name=model_name)
+                return transcribe_with_mlx_cli(chunk_path, model_name=model_name)
             except Exception as cli_error:
                 raise RuntimeError(f"{api_error}\nCLI fallback also failed: {cli_error}") from cli_error
+    raise RuntimeError(f"Unsupported ASR backend: {backend}")
+
+
+def transcribe_audio(
+    audio_path: Path,
+    *,
+    backend: str,
+    model_name: str,
+    language: str | None,
+    att_context_size: list[int] | None,
+    chunk_seconds: int,
+) -> str:
+    resolved_backend = resolve_asr_backend(backend)
+    chunks = split_audio(audio_path, audio_path.parent, chunk_seconds)
+    transcripts: list[str] = []
+    for index, (chunk_path, start, end) in enumerate(chunks, start=1):
+        print(
+            f"Transcribing chunk {index}/{len(chunks)} with {resolved_backend} "
+            f"[{format_timestamp(start)}-{format_timestamp(end)}]",
+            file=sys.stderr,
+            flush=True,
+        )
+        chunk_transcript = transcribe_chunk(
+            chunk_path,
+            backend=resolved_backend,
+            model_name=model_name,
+            language=language,
+            att_context_size=att_context_size,
+        )
         if chunk_transcript:
             if len(chunks) == 1:
                 transcripts.append(chunk_transcript)
@@ -639,16 +859,17 @@ def write_outputs(result: ProcessingResult, output_dir: Path, output_format: str
 
 def main() -> int:
     args = parse_args()
+    if args.env_file:
+        load_env_file(Path(args.env_file).expanduser(), override=True)
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     title = source_title(args.source, args.title)
     att_context_size = parse_att_context_size(args.att_context_size)
-
     with tempfile.TemporaryDirectory(prefix="video-report-") as temp_name:
         temp_dir = Path(temp_name)
         transcript: str | None = None
-        transcript_model = args.model
+        transcript_model = "pending"
 
         if is_url(args.source) and args.transcript_source in {"auto", "subtitles"}:
             transcript = fetch_url_subtitles(
@@ -673,9 +894,13 @@ def main() -> int:
         normalized_audio: Path | None = None
         if transcript is None:
             normalized_audio = normalize_audio(media_path, temp_dir)
+            resolved_backend = resolve_asr_backend(args.asr_backend)
+            model_name = resolve_model_name(resolved_backend, args.model)
+            transcript_model = f"{resolved_backend}:{model_name}"
             transcript = transcribe_audio(
                 normalized_audio,
-                model_name=args.model,
+                backend=resolved_backend,
+                model_name=model_name,
                 language=args.language,
                 att_context_size=att_context_size,
                 chunk_seconds=args.chunk_seconds,

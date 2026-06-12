@@ -1,29 +1,30 @@
 # Video Report Nemotron
 
-Video Report Nemotron is a Hermes skill for turning video links or local media files into structured reports. It prefers existing platform subtitles when they are available, falls back to local Apple Silicon ASR with `mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit`, and can build Markdown, HTML, and PDF reports with selected video frames.
+Video Report Nemotron is a Hermes skill for turning video links or local media files into polished Markdown, HTML, and PDF reports. It uses platform subtitles first, falls back to Nemotron ASR only when needed, and places selected video frames near the sections where they actually help the explanation.
 
 [中文文档](docs/README.zh-CN.md)
 
 ![Rendered report preview](docs/assets/report-html-preview.png)
 
-## What It Does
+## Highlights
 
-- Accepts YouTube, Bilibili, other `yt-dlp` supported URLs, or local media files.
-- Uses platform subtitles first, so local ASR is only invoked when subtitles are unavailable or explicitly requested.
-- Runs local Apple Silicon transcription through MLX/Nemotron when ASR is needed.
-- Creates transcript-first Markdown/JSON artifacts for reuse.
-- Builds a visual report pipeline: transcript block review, frame capture, OCR, optional multimodal fallback, then a final user-facing report.
-- Exports Markdown, HTML, and PDF with proper tables, lists, blockquotes, inline formatting, images, and captions.
+- Works with YouTube, Bilibili, other `yt-dlp` supported URLs, and local audio/video files.
+- Uses existing subtitles before local ASR, which keeps many URL reports fast and cheap.
+- Uses Nemotron ASR only for subtitle fallback. The bundled local backend is Apple Silicon MLX with `mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit`.
+- Does not fall back to Whisper-family ASR. Other platforms can use subtitle-first reports today and need an explicit Nemotron backend for local ASR.
+- Generates timestamped transcript artifacts, reviewed frame manifests, OCR/vision notes, and final reader-facing reports.
+- Can force the final output language independently from the video language, for example English video to Chinese report or Chinese video to English report.
+- Runs in Hermes CLI and Hermes Desktop when installed into the active Hermes skills directory.
 
 ## Example Output
 
-This repository includes a generated example from a public YouTube video:
+This repository includes a generated report from a public YouTube video:
 
 - [Markdown report](examples/QggkUtXNkPo/report.md)
 - [HTML report](examples/QggkUtXNkPo/report.html)
 - [PDF report](examples/QggkUtXNkPo/report.pdf)
 
-The final report embeds selected frames only where the visual context helps explain the content.
+The report embeds selected frames only where visual context supports the written analysis.
 
 ![Visual evidence frame](docs/assets/visual-evidence-frame.png)
 
@@ -45,9 +46,7 @@ The final report embeds selected frames only where the visual context helps expl
 
 ## Requirements
 
-The skill is designed for macOS on Apple Silicon.
-
-Install system tools:
+Common tools:
 
 ```bash
 brew install ffmpeg imagemagick
@@ -55,65 +54,79 @@ npm install -g @run-llama/liteparse
 playwright install chromium
 ```
 
-Create a Python environment:
+Python environment:
 
 ```bash
 uv venv .venv-nemotron --python 3.12
-uv pip install --python .venv-nemotron/bin/python \
-  yt-dlp pytest "git+https://github.com/Blaizzy/mlx-audio.git"
+uv pip install --python .venv-nemotron/bin/python yt-dlp httpx pytest
 ```
 
-The default ASR model is:
+For local ASR on Apple Silicon:
+
+```bash
+uv pip install --python .venv-nemotron/bin/python \
+  "git+https://github.com/Blaizzy/mlx-audio.git"
+```
+
+The default local ASR model is:
 
 ```text
 mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit
 ```
 
-The model is downloaded through the Hugging Face cache on first use.
+The model is downloaded through the Hugging Face cache on first use. On Linux or Windows, subtitle-first URL reports still work, but local ASR requires adding a concrete Nemotron backend; this project intentionally does not silently substitute Whisper.
 
 ## Configuration
 
-Copy the template and set your local values:
+Copy the template and set local values:
 
 ```bash
 cp skill/.env.example skill/.env
 ```
 
-`skill/.env.example` contains OpenAI-compatible settings for text composition and multimodal visual fallback:
+`skill/.env.example` contains OpenAI-compatible settings for report composition and multimodal visual fallback:
 
 ```dotenv
-OPENAI_BASE_URL=https://sub2api.gptclubapi.xyz/v1
-OPENAI_VISION_MODEL=gpt-5.5
-OPENAI_TEXT_MODEL=gpt-5.5
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_TEXT_MODEL=gpt-4.1-mini
+OPENAI_VISION_MODEL=gpt-4.1-mini
 OPENAI_API_KEY=
+REPORT_LANGUAGE=auto
+ASR_BACKEND=auto
+MLX_ASR_MODEL=mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit
 ```
 
-Never commit a real API key. The tracked file is only a template.
+Use any OpenAI-compatible endpoint by changing `OPENAI_BASE_URL` and model names. Never commit a real API key.
 
 ## Quick Start
 
-Generate a transcript-first report:
+Generate the transcript/metadata artifact:
 
 ```bash
 .venv-nemotron/bin/python skill/scripts/video_report.py \
   "https://www.youtube.com/watch?v=QggkUtXNkPo" \
+  --transcript-source auto \
+  --asr-backend auto \
   --language zh-CN \
   --output-dir reports/QggkUtXNkPo \
   --chunk-seconds 90
 ```
 
-By default, `--transcript-source auto` tries subtitles first and uses local ASR only when subtitles are unavailable. To force local ASR:
+`--transcript-source auto` tries platform subtitles first. If no subtitles are available, it extracts audio and uses the selected Nemotron backend.
+
+To force local ASR:
 
 ```bash
 .venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
   --transcript-source asr \
-  --language zh-CN \
+  --asr-backend auto \
+  --language en-US \
   --output-dir reports/local-video
 ```
 
-## Visual Report Pipeline
+## Final Report Pipeline
 
-After `video_report.py` produces a JSON artifact, run the visual pipeline:
+`video_report.py` creates an intermediate transcript artifact. For a user-facing report, run the visual pipeline and final composer:
 
 ```bash
 # 1. Review transcript blocks and decide which ones need video evidence.
@@ -137,28 +150,61 @@ After `video_report.py` produces a JSON artifact, run the visual pipeline:
 .venv-nemotron/bin/python skill/scripts/video_multimodal_frames.py \
   reports/QggkUtXNkPo/visual/visual_manifest.ocr.json \
   -o reports/QggkUtXNkPo/visual/visual_manifest.vision.json \
-  --env-file skill/.env
+  --env-file skill/.env \
+  --analysis-language auto
 
-# 5. Compose the final user-facing report.
+# 5. Compose the final reader-facing Markdown, HTML, and PDF.
 .venv-nemotron/bin/python skill/scripts/video_compose_final_report.py \
   reports/QggkUtXNkPo/QggkUtXNkPo.json \
   reports/QggkUtXNkPo/visual/visual_manifest.vision.json \
   --markdown reports/QggkUtXNkPo/visual/report.md \
   --html reports/QggkUtXNkPo/visual/report.html \
   --pdf reports/QggkUtXNkPo/visual/report.pdf \
-  --env-file skill/.env
+  --env-file skill/.env \
+  --report-language zh-CN
 ```
 
-## Installing as a Hermes Skill
+Use `--report-language en`, `--report-language zh-CN`, or another language tag to force the final report language. The composer validates obvious language mismatches and retries once when provider output ignores the requested language.
 
-Copy the skill folder into your Hermes skills directory:
+## Hermes CLI
+
+Install the skill:
 
 ```bash
 mkdir -p ~/.hermes/skills/media
 rsync -a skill/ ~/.hermes/skills/media/video-report-nemotron/
 ```
 
-Then ask Hermes to analyze, transcribe, summarize, or generate a report from a video URL or local media file.
+Then ask Hermes for the final report:
+
+```text
+Use video-report-nemotron to analyze https://www.youtube.com/watch?v=QggkUtXNkPo.
+Generate the final Markdown, HTML, and PDF report in Simplified Chinese.
+```
+
+## Hermes Desktop
+
+Hermes Desktop can use the same skill if it is installed into the desktop backend's active `HERMES_HOME`.
+
+For the default local home:
+
+```bash
+mkdir -p ~/.hermes/skills/media
+rsync -a skill/ ~/.hermes/skills/media/video-report-nemotron/
+```
+
+If you run Desktop from a Hermes source checkout with a different `HERMES_HOME`, install into that home instead. After installing, use `/reload-skills` in Desktop or restart the app.
+
+Desktop prompt example:
+
+```text
+Use video-report-nemotron to analyze this video:
+https://www.youtube.com/watch?v=QggkUtXNkPo
+
+Generate a rich final report with appropriate images.
+Output Markdown, HTML, and PDF.
+Force the report language to English.
+```
 
 ## Testing
 
@@ -166,7 +212,7 @@ Then ask Hermes to analyze, transcribe, summarize, or generate a report from a v
 .venv-nemotron/bin/python -m pytest skill/tests
 ```
 
-The tests cover transcript source behavior, visual manifest selection, environment loading, report composition, and Markdown-to-HTML rendering for PDF output.
+The tests cover subtitle source behavior, Nemotron-only backend selection, language forcing, visual manifest selection, environment loading, report composition, and Markdown-to-HTML rendering for PDF output.
 
 ## Security Notes
 
@@ -174,4 +220,3 @@ The tests cover transcript source behavior, visual manifest selection, environme
 - Media downloads and normalized audio/video files are ignored.
 - The example report is included as a small reproducible artifact; raw downloaded media and model weights are not committed.
 - Public video content may still be subject to the source platform's terms and copyright. Use the tool on content you are allowed to process.
-

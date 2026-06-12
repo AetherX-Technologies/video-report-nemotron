@@ -1,19 +1,21 @@
 # Video Report Nemotron 中文文档
 
-Video Report Nemotron 是一个 Hermes skill，用来把视频链接或本地音视频文件转换成结构化报告。它会优先使用平台已有字幕；只有在字幕不可用或你明确要求本机转录时，才会启用 Apple Silicon 本地 ASR，也就是 `mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit`。
+Video Report Nemotron 是一个 Hermes skill，用来把视频链接或本地音视频文件转换成结构清晰、可直接给用户看的 Markdown、HTML、PDF 图文报告。它默认优先使用平台已有字幕；只有字幕不可用或你明确要求本机转录时，才启用 Nemotron ASR。
 
 首页英文文档见 [README.md](../README.md)。
 
 ![报告渲染预览](assets/report-html-preview.png)
 
-## 能做什么
+## 核心能力
 
-- 支持 YouTube、Bilibili、其他 `yt-dlp` 支持的视频 URL，以及本地媒体文件。
+- 支持 YouTube、Bilibili、其他 `yt-dlp` 支持的视频 URL，以及本地音视频文件。
 - 默认优先读取已有字幕，避免不必要的本机转录。
-- 字幕不可用时，用 MLX/Nemotron 在 Apple Silicon 上本地转录。
-- 输出 Markdown 和 JSON，方便后续复用。
+- 本机 ASR 只使用 Nemotron。当前仓库自带的本地后端是 Apple Silicon MLX：`mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit`。
+- 不会偷偷回退到 Whisper / faster-whisper。Linux 或 Windows 可以先走字幕优先链路；如果要本地 ASR，需要接入明确的 Nemotron 后端。
 - 支持视觉报告链路：按转写时间块判断是否需要看视频，按需截图，先 OCR，再在 OCR 不足时使用多模态兜底。
-- 最终生成面向用户的 Markdown、HTML、PDF 报告，支持表格、引用、列表、粗体、代码、图片和图片说明的正常渲染。
+- 最终生成面向用户的 Markdown、HTML、PDF 报告，图片会插入到真正相关的正文位置。
+- 可以强制指定最终报告语言，例如英文视频输出中文报告，中文视频输出英文报告。
+- 可用于 Hermes CLI，也可用于 Hermes Desktop。
 
 ## 示例产物
 
@@ -45,9 +47,7 @@ Video Report Nemotron 是一个 Hermes skill，用来把视频链接或本地音
 
 ## 环境要求
 
-这个 skill 主要面向 Apple Silicon macOS。
-
-安装系统依赖：
+通用依赖：
 
 ```bash
 brew install ffmpeg imagemagick
@@ -55,12 +55,18 @@ npm install -g @run-llama/liteparse
 playwright install chromium
 ```
 
-创建 Python 环境：
+Python 环境：
 
 ```bash
 uv venv .venv-nemotron --python 3.12
+uv pip install --python .venv-nemotron/bin/python yt-dlp httpx pytest
+```
+
+Apple Silicon 本机 ASR：
+
+```bash
 uv pip install --python .venv-nemotron/bin/python \
-  yt-dlp pytest "git+https://github.com/Blaizzy/mlx-audio.git"
+  "git+https://github.com/Blaizzy/mlx-audio.git"
 ```
 
 默认 ASR 模型：
@@ -69,7 +75,7 @@ uv pip install --python .venv-nemotron/bin/python \
 mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit
 ```
 
-第一次启用本机 ASR 时，模型权重会通过 Hugging Face cache 下载。
+第一次启用本机 ASR 时，模型权重会通过 Hugging Face cache 下载。Linux / Windows 可以正常使用字幕优先的视频报告；本机 ASR 需要先接入明确的 Nemotron 后端，不能用 Whisper 系列模型替代。
 
 ## 配置
 
@@ -79,49 +85,57 @@ mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit
 cp skill/.env.example skill/.env
 ```
 
-`skill/.env.example` 里是 OpenAI-compatible 的文本生成和视觉兜底配置：
+`skill/.env.example` 里是 OpenAI-compatible 的报告生成和视觉兜底配置：
 
 ```dotenv
-OPENAI_BASE_URL=https://sub2api.gptclubapi.xyz/v1
-OPENAI_VISION_MODEL=gpt-5.5
-OPENAI_TEXT_MODEL=gpt-5.5
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_TEXT_MODEL=gpt-4.1-mini
+OPENAI_VISION_MODEL=gpt-4.1-mini
 OPENAI_API_KEY=
+REPORT_LANGUAGE=auto
+ASR_BACKEND=auto
+MLX_ASR_MODEL=mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit
 ```
 
-真实 API key 只放在本地 `.env` 或 shell 环境变量里，不要提交到 Git。
+你可以替换为任何 OpenAI-compatible API endpoint 和模型名。真实 API key 只放在本地 `.env` 或 shell 环境变量里，不要提交到 Git。
 
 ## 快速开始
 
-生成一份以转写为核心的报告：
+先生成转写和元数据中间产物：
 
 ```bash
 .venv-nemotron/bin/python skill/scripts/video_report.py \
   "https://www.youtube.com/watch?v=QggkUtXNkPo" \
+  --transcript-source auto \
+  --asr-backend auto \
   --language zh-CN \
   --output-dir reports/QggkUtXNkPo \
   --chunk-seconds 90
 ```
 
-默认 `--transcript-source auto` 会先尝试平台字幕；字幕不可用时才启用本机 ASR。强制本机 ASR：
+默认 `--transcript-source auto` 会先尝试平台字幕；字幕不可用时才会提取音频并使用选定的 Nemotron 后端。
+
+强制本机 ASR：
 
 ```bash
 .venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
   --transcript-source asr \
-  --language zh-CN \
+  --asr-backend auto \
+  --language en-US \
   --output-dir reports/local-video
 ```
 
-## 视觉报告链路
+## 最终报告链路
 
-`video_report.py` 生成 JSON 后，可以继续跑视觉报告：
+`video_report.py` 的 Markdown 是中间转写产物，不是最终面向用户的报告。完整报告要继续跑视觉链路和最终 composer：
 
 ```bash
-# 1. 生成按时间块审核的视频截图 manifest。
+# 1. 审核每个转写时间块，判断是否需要视频画面。
 .venv-nemotron/bin/python skill/scripts/video_visual_manifest.py \
   reports/QggkUtXNkPo/QggkUtXNkPo.json \
   -o reports/QggkUtXNkPo/visual/visual_manifest.json
 
-# 2. 只对 needs_video=true 的时间块截图。
+# 2. 只对审核后需要画面的时间块截图。
 .venv-nemotron/bin/python skill/scripts/video_capture_frames.py \
   reports/QggkUtXNkPo/visual/visual_manifest.json \
   -o reports/QggkUtXNkPo/visual/visual_manifest.frames.json \
@@ -137,28 +151,61 @@ OPENAI_API_KEY=
 .venv-nemotron/bin/python skill/scripts/video_multimodal_frames.py \
   reports/QggkUtXNkPo/visual/visual_manifest.ocr.json \
   -o reports/QggkUtXNkPo/visual/visual_manifest.vision.json \
-  --env-file skill/.env
+  --env-file skill/.env \
+  --analysis-language auto
 
-# 5. 生成最终面向用户的报告。
+# 5. 生成最终面向用户的 Markdown、HTML、PDF。
 .venv-nemotron/bin/python skill/scripts/video_compose_final_report.py \
   reports/QggkUtXNkPo/QggkUtXNkPo.json \
   reports/QggkUtXNkPo/visual/visual_manifest.vision.json \
   --markdown reports/QggkUtXNkPo/visual/report.md \
   --html reports/QggkUtXNkPo/visual/report.html \
   --pdf reports/QggkUtXNkPo/visual/report.pdf \
-  --env-file skill/.env
+  --env-file skill/.env \
+  --report-language zh-CN
 ```
 
-## 安装为 Hermes Skill
+用 `--report-language en`、`--report-language zh-CN` 或其他语言标签可以强制最终报告语言。composer 会检查明显的语言错误；如果模型没有按要求输出，会自动重写一次。
 
-复制到 Hermes skills 目录：
+## Hermes CLI
+
+安装 skill：
 
 ```bash
 mkdir -p ~/.hermes/skills/media
 rsync -a skill/ ~/.hermes/skills/media/video-report-nemotron/
 ```
 
-之后就可以在 Hermes 里让它分析、转录、总结视频，或者生成完整 Markdown/HTML/PDF 报告。
+然后在 Hermes 里直接要求生成最终报告：
+
+```text
+使用 video-report-nemotron 分析 https://www.youtube.com/watch?v=QggkUtXNkPo。
+强制输出简体中文，生成最终 Markdown、HTML、PDF 报告。
+```
+
+## Hermes Desktop
+
+Hermes Desktop 也能用。关键是把 skill 安装到 Desktop backend 当前使用的 `HERMES_HOME` 下面。
+
+默认本地目录：
+
+```bash
+mkdir -p ~/.hermes/skills/media
+rsync -a skill/ ~/.hermes/skills/media/video-report-nemotron/
+```
+
+如果你是从 Hermes 源码仓库启动 Desktop，并且设置了其他 `HERMES_HOME`，就安装到那个 home 里。安装后在 Desktop 里执行 `/reload-skills`，或者重启桌面端。
+
+桌面端提示词示例：
+
+```text
+使用 video-report-nemotron 分析这个视频：
+https://www.youtube.com/watch?v=QggkUtXNkPo
+
+生成内容丰富、配图合理的最终报告。
+输出 Markdown、HTML、PDF。
+强制报告语言为英文。
+```
 
 ## 测试
 
@@ -166,7 +213,7 @@ rsync -a skill/ ~/.hermes/skills/media/video-report-nemotron/
 .venv-nemotron/bin/python -m pytest skill/tests
 ```
 
-测试覆盖字幕优先策略、视觉 manifest、环境变量加载、报告生成和 PDF 所需的 Markdown 渲染。
+测试覆盖字幕优先策略、仅 Nemotron 的 ASR 后端选择、强制输出语言、视觉 manifest、环境变量加载、报告生成和 PDF 所需的 Markdown 渲染。
 
 ## 安全说明
 
@@ -174,4 +221,3 @@ rsync -a skill/ ~/.hermes/skills/media/video-report-nemotron/
 - 下载的视频、音频和中间媒体文件不提交。
 - 示例报告只保留小型可复现产物，不包含模型权重和原始媒体下载。
 - 公开视频内容仍可能受平台条款和版权限制；请只处理你有权处理的内容。
-

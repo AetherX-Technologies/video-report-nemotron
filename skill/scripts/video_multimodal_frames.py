@@ -16,8 +16,8 @@ from typing import Any
 import httpx
 
 
-DEFAULT_BASE_URL = "https://sub2api.gptclubapi.xyz/v1"
-DEFAULT_MODEL = "gpt-5.5"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MODEL = "gpt-4.1-mini"
 
 
 def parse_env_value(value: str) -> str:
@@ -74,8 +74,9 @@ def load_env_from_argv(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--env-file")
     known, _ = parser.parse_known_args(argv)
+    explicit_path = Path(known.env_file).expanduser() if known.env_file else None
     for env_path in candidate_env_files(known.env_file):
-        load_env_file(env_path)
+        load_env_file(env_path, override=explicit_path is not None and env_path == explicit_path)
 
 
 def parse_args() -> argparse.Namespace:
@@ -110,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override the default visual analysis prompt.",
     )
+    parser.add_argument(
+        "--analysis-language",
+        default=os.environ.get("REPORT_LANGUAGE", "auto"),
+        help="Language for visual notes: auto, en, zh-CN, ja, etc.",
+    )
     return parser.parse_args()
 
 
@@ -119,7 +125,27 @@ def image_data_url(path: Path) -> str:
     return f"data:{mime_type};base64,{payload}"
 
 
-def default_prompt(segment: dict[str, Any], frame: dict[str, Any]) -> str:
+def language_instruction(language: str | None) -> str:
+    normalized = (language or "auto").strip()
+    if normalized in {"", "auto"}:
+        return "Use the transcript's main language. If unclear, use English."
+    labels = {
+        "en": "English",
+        "zh": "Simplified Chinese",
+        "zh-CN": "Simplified Chinese",
+        "zh-Hans": "Simplified Chinese",
+        "zh-TW": "Traditional Chinese",
+        "zh-Hant": "Traditional Chinese",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+    }
+    return f"Use {labels.get(normalized, normalized)}."
+
+
+def default_prompt(segment: dict[str, Any], frame: dict[str, Any], language: str | None = "auto") -> str:
     questions = "\n".join(f"- {q}" for q in segment.get("visual_questions", [])) or "- Identify useful visual evidence."
     transcript = segment.get("transcript", "")
     ocr_text = frame.get("ocr", {}).get("text", "")
@@ -127,7 +153,9 @@ def default_prompt(segment: dict[str, Any], frame: dict[str, Any]) -> str:
 
 The transcript block may contain ASR errors. Use the image as primary evidence, then use OCR and transcript only as context.
 
-Return concise Chinese notes with:
+Return concise notes. {language_instruction(language)}
+
+Include:
 1. What is visible in the frame.
 2. Whether it answers the visual questions.
 3. Any key text, numbers, charts, tables, or relationships visible.
@@ -262,7 +290,7 @@ def main() -> int:
             if args.max_frames is not None and analyzed >= args.max_frames:
                 continue
             frame_path = Path(frame["path"]).expanduser().resolve()
-            prompt = args.prompt or default_prompt(segment, frame)
+            prompt = args.prompt or default_prompt(segment, frame, args.analysis_language)
             if args.provider == "none":
                 frame["vision"] = {
                     "status": "pending",

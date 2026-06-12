@@ -184,6 +184,129 @@ def test_compose_report_replaces_image_placeholders(tmp_path):
     assert "[IMAGE:img_01]" not in markdown
 
 
+def test_validate_final_report_rejects_short_or_unresolved_output():
+    image_bank = [{"id": "img_01", "path": "frame.png", "caption": "图", "note": "说明"}]
+
+    try:
+        final_report.validate_final_report("# 标题\n\n## 核心结论\n\n太短\n\n[IMAGE:img_01]\n\n## 读者使用提醒\n\n提醒", image_bank, "zh-CN")
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("validate_final_report should reject weak reports")
+
+    assert "too short" in message
+    assert "unresolved image placeholders" in message
+
+
+def test_ensure_standard_sections_wraps_llm_markdown():
+    markdown = "# Demo\n\n## 自定义章节\n\n" + ("这是模型生成的正文。" * 120)
+
+    wrapped = final_report.ensure_standard_sections(markdown, "zh-CN")
+
+    assert "## 核心结论" in wrapped
+    assert "## 读者使用提醒" in wrapped
+    assert "## 自定义章节" in wrapped
+
+
+def test_compose_infers_report_language_from_transcript():
+    zh_report = {"language": "", "transcript": "这里是中文视频内容，讨论市场状态和风险信号。" * 5}
+    en_report = {"language": "", "transcript": "This is an English lecture about markets, signals, and risk." * 5}
+
+    assert final_report.infer_report_language(zh_report, "auto") == "zh-CN"
+    assert final_report.infer_report_language(en_report, "auto") == "en"
+    assert final_report.infer_report_language(en_report, "zh-CN") == "zh-CN"
+
+
+def test_compose_deterministic_report_can_render_english_fallback(tmp_path):
+    frame = tmp_path / "assets" / "frame.png"
+    frame.parent.mkdir()
+    frame.write_bytes(b"not-a-real-image-for-markdown-test")
+    report = {
+        "source": "https://example.com/video",
+        "title": "Demo",
+        "language": "en",
+        "transcript": (
+            "[00:00-01:30] This lecture explains market states, VIX 40, "
+            "liquidity risk, spoofing, and why signal quality matters."
+        ),
+    }
+    image_bank = [
+        {
+            "id": "img_01",
+            "path": "assets/frame.png",
+            "caption": "Market state diagram",
+            "note": "Shows the state matrix.",
+            "segment_text": "market states",
+            "start": "0",
+            "timestamp": "00:00-01:30",
+        }
+    ]
+
+    markdown = final_report.deterministic_report(report, image_bank, "Demo Report", "en")
+
+    assert "## Core Takeaways" in markdown
+    assert "## Reader Notes" in markdown
+    assert "Source video:" in markdown
+    assert "原视频" not in markdown
+    assert "## 核心结论" not in markdown
+    assert "[IMAGE:img_01]" in markdown
+
+
+def test_validate_final_report_rejects_wrong_output_language():
+    image_bank = []
+    markdown = (
+        "# 穷鬼移民 Deep Report\n\n"
+        "## Core Takeaways\n\n"
+        + ("这是一段中文内容，应该不能作为英文最终报告通过。" * 80)
+        + "\n\n## Reader Notes\n\n"
+        "Treat this report as a checklist."
+    )
+
+    try:
+        final_report.validate_final_report(markdown, image_bank, "en")
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("validate_final_report should reject wrong-language output")
+
+    assert "too much Chinese" in message or "title is not" in message
+
+
+def test_compose_image_bank_localizes_english_captions(tmp_path):
+    frame = tmp_path / "frames" / "frame.png"
+    frame.parent.mkdir()
+    frame.write_bytes(b"not-a-real-image-for-markdown-test")
+    manifest = {
+        "segments": [
+            {
+                "id": "seg_0001",
+                "timestamp": "00:00-01:30",
+                "needs_video": True,
+                "priority": "medium",
+                "evidence_types": ["chart"],
+                "transcript": "The speaker is showing a chart of core AI skills.",
+                "frames": [
+                    {
+                        "path": str(frame),
+                        "timestamp": "00:00:12",
+                        "ocr": {"status": "done", "adequate": True, "text": "AI Skills"},
+                    }
+                ],
+            }
+        ]
+    }
+
+    image_bank = final_report.build_image_bank(manifest, tmp_path / "report.md", 3, "en")
+    markdown = final_report.render_images("[IMAGE:img_01]\n", image_bank, "en")
+
+    assert image_bank[0]["caption"] == "Figure 1: Chart or metric view"
+    assert "This image shows chart or metric view" in image_bank[0]["note"]
+    assert "![Figure 1: Chart or metric view]" in markdown
+    assert "图 1" not in markdown
+    assert "曲线或指标图" not in markdown
+    assert not any("\u4e00" <= char <= "\u9fff" for char in markdown)
+
+
 def test_compose_fallback_report_is_detail_preserving_and_user_facing(tmp_path):
     frame = tmp_path / "assets" / "frame.png"
     frame.parent.mkdir()
@@ -214,18 +337,22 @@ def test_compose_fallback_report_is_detail_preserving_and_user_facing(tmp_path):
     ]
 
     markdown = final_report.deterministic_report(report, image_bank, "视频内容深度报告")
+    markdown = final_report.clean_final_markdown(final_report.render_images(markdown, image_bank, "zh-CN"))
 
-    assert len(markdown) > 500
+    assert len(final_report.plain_text(markdown)) > 1200
     assert "## 核心结论" in markdown
+    assert "## 读者使用提醒" in markdown
     assert "2020 年 3 月 16 日" in markdown
     assert "VIX 82.69" in markdown
     assert "撤单量是成交量 50 倍以上" in markdown
-    assert "[IMAGE:img_01]" in markdown
+    assert "![市场状态支付矩阵](assets/frame.png)" in markdown
+    assert "[IMAGE:img_01]" not in markdown
     assert "OCR" not in markdown
     assert "manifest" not in markdown
     assert "Transcript block" not in markdown
     assert "需要配图" not in markdown
     assert "适合插入" not in markdown
+    final_report.validate_final_report(markdown, image_bank, "zh-CN")
 
 
 def test_compose_selects_frames_across_whole_video(tmp_path):
