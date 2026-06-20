@@ -115,6 +115,36 @@ MLX_ASR_MODEL=mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit
 
 默认 `--transcript-source auto` 会先尝试平台字幕；字幕不可用时才会提取音频并使用选定的 Nemotron 后端。
 
+## YouTube 新访问策略
+
+这一节只针对 YouTube，不是本地文件、Bilibili 或其他 `yt-dlp` 来源的通用策略。
+
+YouTube 现在更频繁地对匿名抓取触发 bot 校验、播放完整性校验或 PO-token/player challenge。典型现象包括：`Sign in to confirm you're not a bot`、反复下载 player JavaScript 时出现 `IncompleteRead`、`n challenge solving failed`，或者格式列表里只有 `sb0`/`sb1` 这类 storyboard 条目。遇到这些情况时，不要把标题、简介、推荐、广告或 live chat 当成视频口播正文来写报告。
+
+推荐顺序：
+
+1. 先尝试字幕/自动字幕；如果视频需要登录态，就使用浏览器 cookies 或导出的 `cookies.txt` 做诊断：
+
+```bash
+yt-dlp --cookies-from-browser safari --no-playlist --list-subs --ignore-no-formats URL
+yt-dlp --cookies cookies.txt --no-playlist --list-subs --ignore-no-formats URL
+```
+
+2. 如果 cookies 可用但视频没有字幕，优先让用户提供本地音视频文件，然后走正常 ASR 链路：
+
+```bash
+.venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
+--transcript-source asr \
+--asr-backend auto \
+--language en-US \
+--output-dir reports/local-video
+```
+
+3. 如果 YouTube 只开放元数据、不开放可播放媒体格式，可以少量尝试 `yt-dlp` 的 player/client 诊断参数，然后停止；不要无限循环尝试随机 extractor 设置。
+4. 如果最终仍然只有元数据或 storyboard 格式，就要求用户提供复制出来的字幕、本地媒体文件，或可用的 `cookies.txt`。只有在用户明确要求时，才生成 metadata-only 报告。
+
+更详细的 YouTube 诊断参考见 [skill/references/youtube-cookies-po-token.md](../skill/references/youtube-cookies-po-token.md)。
+
 强制本机 ASR：
 
 ```bash

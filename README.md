@@ -114,6 +114,36 @@ Generate the transcript/metadata artifact:
 
 `--transcript-source auto` tries platform subtitles first. If no subtitles are available, it extracts audio and uses the selected Nemotron backend.
 
+## YouTube Access Strategy
+
+This section is specifically for YouTube. It is not the general strategy for local files, Bilibili, or other `yt-dlp` sources.
+
+YouTube increasingly blocks anonymous extraction with bot checks, playback-integrity checks, or PO-token/player challenges. Common symptoms include `Sign in to confirm you're not a bot`, repeated player JavaScript `IncompleteRead` errors, `n challenge solving failed`, or format lists that contain only storyboard entries such as `sb0`/`sb1`. In those cases, do not treat the video title, description, recommendations, ads, or live chat as the spoken content.
+
+Use this order:
+
+1. Try subtitles/captions first, with browser or exported cookies when the video requires a logged-in session:
+
+```bash
+yt-dlp --cookies-from-browser safari --no-playlist --list-subs --ignore-no-formats URL
+yt-dlp --cookies cookies.txt --no-playlist --list-subs --ignore-no-formats URL
+```
+
+2. If cookies work but no captions exist, use a local audio/video file and run the normal ASR path:
+
+```bash
+.venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
+--transcript-source asr \
+--asr-backend auto \
+--language en-US \
+--output-dir reports/local-video
+```
+
+3. If YouTube exposes metadata but not playable media formats, try a small number of `yt-dlp` player/client diagnostics, then stop. Do not loop indefinitely trying random extractor settings.
+4. If extraction still returns only metadata or storyboard formats, ask for a copied transcript, a local media file, or a working exported `cookies.txt`. Only produce a metadata-only report when the user explicitly asks for one.
+
+Detailed YouTube diagnostics are in [skill/references/youtube-cookies-po-token.md](skill/references/youtube-cookies-po-token.md).
+
 To force local ASR:
 
 ```bash
