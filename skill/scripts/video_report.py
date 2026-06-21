@@ -210,8 +210,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="video-report-output",
-        help="Directory for report artifacts.",
+        default=None,
+        help=(
+            "Directory for report artifacts. Defaults to VIDEO_REPORT_OUTPUT_ROOT/source-slug, "
+            "or /Volumes/SN770Coder/Data/video_reports/source-slug when that mounted drive exists."
+        ),
     )
     parser.add_argument(
         "--format",
@@ -253,6 +256,23 @@ def parse_args() -> argparse.Namespace:
         help="Split audio into chunks of this many seconds before ASR. Use 0 to disable chunking.",
     )
     return parser.parse_args()
+
+
+def default_output_root() -> Path:
+    configured = os.environ.get("VIDEO_REPORT_OUTPUT_ROOT")
+    if configured:
+        return Path(configured).expanduser()
+    mounted_root = Path("/Volumes/SN770Coder/Data/video_reports")
+    if mounted_root.parent.exists():
+        return mounted_root
+    return Path("video-report-output")
+
+
+def resolve_output_dir(source: str, requested_output_dir: str | None, title: str) -> Path:
+    if requested_output_dir:
+        return Path(requested_output_dir).expanduser().resolve()
+    slug_source = title if title and title != "video" else source
+    return (default_output_root() / safe_slug(slug_source)).expanduser().resolve()
 
 
 def is_url(value: str) -> bool:
@@ -861,10 +881,9 @@ def main() -> int:
     args = parse_args()
     if args.env_file:
         load_env_file(Path(args.env_file).expanduser(), override=True)
-    output_dir = Path(args.output_dir).expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     title = source_title(args.source, args.title)
+    output_dir = resolve_output_dir(args.source, args.output_dir, title)
+    output_dir.mkdir(parents=True, exist_ok=True)
     att_context_size = parse_att_context_size(args.att_context_size)
     with tempfile.TemporaryDirectory(prefix="video-report-") as temp_name:
         temp_dir = Path(temp_name)

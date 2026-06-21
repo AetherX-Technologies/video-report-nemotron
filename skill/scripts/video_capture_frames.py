@@ -19,6 +19,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames-dir", required=True, help="Directory where frame PNGs are written.")
     parser.add_argument("--video-source", default=None, help="Override video URL/local path. Defaults to manifest source.")
     parser.add_argument("--format", default="best[height<=720][ext=mp4]/18/best", help="yt-dlp format selector.")
+    parser.add_argument(
+        "--download-dir",
+        default=None,
+        help="Directory for a local video copy when the source is a URL. Defaults to <frames-dir>/../source_video.",
+    )
+    parser.add_argument(
+        "--no-download",
+        action="store_true",
+        help="Use a direct streaming URL instead of first downloading a stable local video copy.",
+    )
+    parser.add_argument(
+        "--keep-video",
+        action="store_true",
+        help="Keep the downloaded local video copy. By default URL downloads are deleted after frame capture.",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing frame files.")
     return parser.parse_args()
 
@@ -43,18 +58,52 @@ def run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return process
 
 
-def resolve_video_input(source: str, format_selector: str) -> str:
+def resolve_video_input(
+    source: str,
+    format_selector: str,
+    *,
+    download_dir: Path | None,
+    no_download: bool,
+    overwrite: bool,
+) -> tuple[str, str | None]:
     if not is_url(source):
         path = Path(source).expanduser().resolve()
         if not path.exists():
             raise SystemExit(f"Local video source does not exist: {path}")
-        return str(path)
+        return str(path), str(path)
     require_command("yt-dlp", "Install it with: pip install yt-dlp")
+    if not no_download:
+        if download_dir is None:
+            raise SystemExit("download_dir is required when downloading URL video sources")
+        download_dir.mkdir(parents=True, exist_ok=True)
+        output_template = download_dir / "source.%(ext)s"
+        command = [
+            "yt-dlp",
+            "-f",
+            format_selector,
+            "--no-playlist",
+            "-o",
+            str(output_template),
+        ]
+        if overwrite:
+            command.append("--force-overwrites")
+        command.append(source)
+        run(command)
+        candidates = sorted(
+            [path for path in download_dir.glob("source.*") if path.is_file()],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            raise RuntimeError("yt-dlp completed but no local video file was found.")
+        local_path = candidates[0].resolve()
+        return str(local_path), str(local_path)
+
     process = run(["yt-dlp", "-f", format_selector, "-g", "--no-playlist", source])
     urls = [line.strip() for line in process.stdout.splitlines() if line.strip()]
     if not urls:
         raise RuntimeError("yt-dlp did not return a direct video URL.")
-    return urls[-1]
+    return urls[-1], None
 
 
 def seconds_to_label(seconds: float) -> str:
@@ -94,11 +143,29 @@ def main() -> int:
     manifest_path = Path(args.manifest).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
     frames_dir = Path(args.frames_dir).expanduser().resolve()
+    download_dir = (
+        Path(args.download_dir).expanduser().resolve()
+        if args.download_dir
+        else frames_dir.parent / "source_video"
+    )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     source = args.video_source or manifest.get("source")
     if not source:
         raise SystemExit("No video source found. Pass --video-source.")
-    video_input = resolve_video_input(str(source), args.format)
+    video_input, local_video_path = resolve_video_input(
+        str(source),
+        args.format,
+        download_dir=download_dir,
+        no_download=args.no_download,
+        overwrite=args.overwrite,
+    )
+    manifest["frame_capture_source"] = {
+        "original_source": str(source),
+        "video_input": video_input,
+        "local_video_path": local_video_path,
+        "downloaded_local_copy": bool(local_video_path and is_url(str(source))),
+        "keep_video": args.keep_video,
+    }
 
     for segment in manifest.get("segments", []):
         if not segment.get("needs_video"):
@@ -121,7 +188,29 @@ def main() -> int:
             "status": "done",
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "source": source,
+            "local_video_path": local_video_path,
         }
+
+    downloaded_local_copy = bool(local_video_path and is_url(str(source)))
+    if downloaded_local_copy and not args.keep_video:
+        local_path = Path(local_video_path)
+        try:
+            local_path.unlink(missing_ok=True)
+            manifest["frame_capture_source"]["cleanup"] = {
+                "status": "deleted",
+                "path": str(local_path),
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            }
+            for segment in manifest.get("segments", []):
+                if segment.get("frame_capture"):
+                    segment["frame_capture"]["local_video_path"] = None
+                    segment["frame_capture"]["local_video_deleted"] = True
+        except OSError as exc:
+            manifest["frame_capture_source"]["cleanup"] = {
+                "status": "failed",
+                "path": str(local_path),
+                "error": str(exc),
+            }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
