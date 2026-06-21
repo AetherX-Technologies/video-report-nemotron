@@ -13,36 +13,39 @@ Video Report Nemotron 是一个 Hermes skill，用来把视频链接或本地音
 - 本机 ASR 只使用 Nemotron。当前仓库自带的本地后端是 Apple Silicon MLX：`mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit`。
 - 不会偷偷回退到 Whisper / faster-whisper。Linux 或 Windows 可以先走字幕优先链路；如果要本地 ASR，需要接入明确的 Nemotron 后端。
 - 支持视觉报告链路：按转写时间块判断是否需要看视频，按需截图，先 OCR，再在 OCR 不足时使用多模态兜底。
+- 对 URL 来源抽帧时，先下载稳定的本地视频副本，再交给 `ffmpeg` 截图；默认抽帧完成后删除临时视频，除非显式使用 `--keep-video`。
+- 新增 `video_render_markdown.py`，用于把已有 Markdown 报告可靠渲染成 HTML/PDF，并保留表格、图片、粗体和 inline code。
 - 最终生成面向用户的 Markdown、HTML、PDF 报告，图片会插入到真正相关的正文位置。
 - 可以强制指定最终报告语言，例如英文视频输出中文报告，中文视频输出英文报告。
 - 可用于 Hermes CLI，也可用于 Hermes Desktop。
 
-## 示例产物
+## 示例输出
 
-仓库包含一个公开 YouTube 视频的示例最终报告：
+仓库里包含一个公开视频的示例报告：
 
-- [Markdown 报告](../examples/QggkUtXNkPo/report.md)
-- [HTML 报告](../examples/QggkUtXNkPo/report.html)
-- [PDF 报告](../examples/QggkUtXNkPo/report.pdf)
+- [Markdown report](../examples/QggkUtXNkPo/report.md)
+- [HTML report](../examples/QggkUtXNkPo/report.html)
+- [PDF report](../examples/QggkUtXNkPo/report.pdf)
 
-报告只在内容确实需要视觉上下文的位置插入截图。
+报告只在视觉信息真正支持正文分析的位置嵌入截图。
 
-![视觉证据示例](assets/visual-evidence-frame.png)
+![视觉证据截图](assets/visual-evidence-frame.png)
 
-## 目录结构
+## 仓库结构
 
 ```text
 .
-├── skill/                     # Hermes skill 包
-│   ├── SKILL.md               # skill 使用说明
-│   ├── .env.example           # 运行配置模板，不包含真实 key
-│   ├── scripts/               # 下载、转录、视觉、OCR、报告脚本
-│   └── tests/                 # pytest 测试
+├── skill/                      # Hermes skill 包
+│   ├── SKILL.md                # skill 使用说明
+│   ├── .env.example            # 运行配置模板，不包含真实 key
+│   ├── references/             # YouTube/Bilibili/报告质量诊断参考
+│   ├── scripts/                # 下载、转写、视觉、OCR、渲染脚本
+│   └── tests/                  # pytest 测试
 ├── docs/
-│   ├── README.zh-CN.md        # 中文文档
-│   └── assets/                # 文档截图
+│   ├── README.zh-CN.md         # 中文文档
+│   └── assets/                 # 文档截图
 └── examples/
-    └── QggkUtXNkPo/           # 示例最终报告
+    └── QggkUtXNkPo/            # 示例最终报告
 ```
 
 ## 环境要求
@@ -115,6 +118,16 @@ MLX_ASR_MODEL=mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit
 
 默认 `--transcript-source auto` 会先尝试平台字幕；字幕不可用时才会提取音频并使用选定的 Nemotron 后端。
 
+强制本机 ASR：
+
+```bash
+.venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
+  --transcript-source asr \
+  --asr-backend auto \
+  --language en-US \
+  --output-dir reports/local-video
+```
+
 ## YouTube 新访问策略
 
 这一节只针对 YouTube，不是本地文件、Bilibili 或其他 `yt-dlp` 来源的通用策略。
@@ -130,30 +143,26 @@ yt-dlp --cookies-from-browser safari --no-playlist --list-subs --ignore-no-forma
 yt-dlp --cookies cookies.txt --no-playlist --list-subs --ignore-no-formats URL
 ```
 
-2. 如果 cookies 可用但视频没有字幕，优先让用户提供本地音视频文件，然后走正常 ASR 链路：
-
-```bash
-.venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
---transcript-source asr \
---asr-backend auto \
---language en-US \
---output-dir reports/local-video
-```
-
+2. 如果 cookies 可用但视频没有字幕，优先让用户提供本地音视频文件，然后走正常 ASR 链路。
 3. 如果 YouTube 只开放元数据、不开放可播放媒体格式，可以少量尝试 `yt-dlp` 的 player/client 诊断参数，然后停止；不要无限循环尝试随机 extractor 设置。
 4. 如果最终仍然只有元数据或 storyboard 格式，就要求用户提供复制出来的字幕、本地媒体文件，或可用的 `cookies.txt`。只有在用户明确要求时，才生成 metadata-only 报告。
 
-更详细的 YouTube 诊断参考见 [skill/references/youtube-cookies-po-token.md](../skill/references/youtube-cookies-po-token.md)。
+更详细的 YouTube 诊断参考见 [skill/references/youtube-cookies-po-token.md](../skill/references/youtube-cookies-po-token.md)，强化版 YouTube 工作流见 [skill/references/youtube-video-report-hardening.md](../skill/references/youtube-video-report-hardening.md)。
 
-强制本机 ASR：
+## 稳定视频抽帧
+
+`video_capture_frames.py` 现在会先把 URL 视频源下载成本地稳定 MP4，再用 `ffmpeg` 按时间点抽帧。这样可以避开直接读取 `googlevideo.com` 签名 URL 时常见的 TLS EOF、URL 过期、seek 失败等问题。默认抽帧完成后会删除临时视频；如果需要保留可审计的视频文件，请加 `--keep-video`。
 
 ```bash
-.venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
-  --transcript-source asr \
-  --asr-backend auto \
-  --language en-US \
-  --output-dir reports/local-video
+.venv-nemotron/bin/python skill/scripts/video_capture_frames.py \
+  reports/QggkUtXNkPo/visual/visual_manifest.json \
+  -o reports/QggkUtXNkPo/visual/visual_manifest.frames.json \
+  --frames-dir reports/QggkUtXNkPo/visual/frames \
+  --download-dir reports/QggkUtXNkPo/visual/source_video \
+  --overwrite
 ```
+
+需要保留下载视频时用 `--keep-video`；明确想走旧的直接流式 URL 行为时用 `--no-download`。
 
 ## 最终报告链路
 
@@ -196,6 +205,20 @@ yt-dlp --cookies cookies.txt --no-playlist --list-subs --ignore-no-formats URL
 ```
 
 用 `--report-language en`、`--report-language zh-CN` 或其他语言标签可以强制最终报告语言。composer 会检查明显的语言错误；如果模型没有按要求输出，会自动重写一次。
+
+## 渲染已有 Markdown
+
+当你已经有 Markdown 报告或事实核查补充稿，只需要可靠生成 HTML/PDF 时，用 `video_render_markdown.py`。它复用 skill 的渲染器，能保留表格、图片、粗体、inline code 和相对图片路径。
+
+```bash
+.venv-nemotron/bin/python skill/scripts/video_render_markdown.py \
+  reports/QggkUtXNkPo/visual/report.md \
+  --html reports/QggkUtXNkPo/visual/report.html \
+  --pdf reports/QggkUtXNkPo/visual/report.pdf \
+  --title "QggkUtXNkPo Report"
+```
+
+报告质量检查参考 [skill/references/report-quality-pitfalls.md](../skill/references/report-quality-pitfalls.md)。
 
 ## Hermes CLI
 
@@ -243,7 +266,7 @@ https://www.youtube.com/watch?v=QggkUtXNkPo
 .venv-nemotron/bin/python -m pytest skill/tests
 ```
 
-测试覆盖字幕优先策略、仅 Nemotron 的 ASR 后端选择、强制输出语言、视觉 manifest、环境变量加载、报告生成和 PDF 所需的 Markdown 渲染。
+测试覆盖字幕优先策略、仅 Nemotron 的 ASR 后端选择、强制输出语言、视觉 manifest、环境变量加载、报告生成和 Markdown-to-HTML/PDF 渲染行为。
 
 ## 安全说明
 

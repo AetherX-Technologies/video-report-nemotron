@@ -9,16 +9,18 @@ Video Report Nemotron is a Hermes skill for turning video links or local media f
 ## Highlights
 
 - Works with YouTube, local audio/video files, and other `yt-dlp` supported URLs when subtitles or media extraction are available.
-- Uses existing subtitles before local ASR, which keeps many URL reports fast and cheap.
+- Uses existing subtitles before local ASR, keeping many URL reports fast and cheap.
 - Uses Nemotron ASR only for subtitle fallback. The bundled local backend is Apple Silicon MLX with `mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit`.
-- Does not fall back to Whisper-family ASR. Other platforms can use subtitle-first reports today and need an explicit Nemotron backend for local ASR.
+- Does not fall back to Whisper-family ASR. Other platforms can use subtitle-first reports today, but local ASR requires an explicit Nemotron backend.
 - Generates timestamped transcript artifacts, reviewed frame manifests, OCR/vision notes, and final reader-facing reports.
-- Can force the final output language independently from the video language, for example English video to Chinese report or Chinese video to English report.
+- Captures visual evidence from URL sources by downloading a stable local video copy before `ffmpeg` frame extraction, then removes that temporary copy unless `--keep-video` is set.
+- Renders existing Markdown reports with table, image, bold, inline-code, HTML, and PDF support through `video_render_markdown.py`.
+- Can force the final output language independently from the source video language.
 - Runs in Hermes CLI and Hermes Desktop when installed into the active Hermes skills directory.
 
 ## Example Output
 
-This repository includes a generated report from a public YouTube video:
+This repository includes a generated report for a public YouTube video:
 
 - [Markdown report](examples/QggkUtXNkPo/report.md)
 - [HTML report](examples/QggkUtXNkPo/report.html)
@@ -32,16 +34,17 @@ The report embeds selected frames only where visual context supports the written
 
 ```text
 .
-├── skill/                     # Hermes skill package
-│   ├── SKILL.md               # Skill instructions
-│   ├── .env.example           # Runtime config template, no real keys
-│   ├── scripts/               # Download, ASR, visual, OCR, report scripts
-│   └── tests/                 # Pytest coverage for the pipeline
+├── skill/                      # Hermes skill package
+│   ├── SKILL.md                # Skill instructions
+│   ├── .env.example            # Runtime config template, no real keys
+│   ├── references/             # YouTube/Bilibili/report quality diagnostics
+│   ├── scripts/                # Download, ASR, visual, OCR, render scripts
+│   └── tests/                  # Pytest coverage
 ├── docs/
-│   ├── README.zh-CN.md        # Chinese documentation
-│   └── assets/                # README screenshots
+│   ├── README.zh-CN.md         # Chinese documentation
+│   └── assets/                 # README screenshots
 └── examples/
-    └── QggkUtXNkPo/           # Example final report artifacts
+    └── QggkUtXNkPo/            # Example final report artifacts
 ```
 
 ## Requirements
@@ -61,14 +64,14 @@ uv venv .venv-nemotron --python 3.12
 uv pip install --python .venv-nemotron/bin/python yt-dlp httpx pytest
 ```
 
-For local ASR on Apple Silicon:
+Local ASR on Apple Silicon:
 
 ```bash
 uv pip install --python .venv-nemotron/bin/python \
   "git+https://github.com/Blaizzy/mlx-audio.git"
 ```
 
-The default local ASR model is:
+Default local ASR model:
 
 ```text
 mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit
@@ -114,6 +117,16 @@ Generate the transcript/metadata artifact:
 
 `--transcript-source auto` tries platform subtitles first. If no subtitles are available, it extracts audio and uses the selected Nemotron backend.
 
+To force local ASR:
+
+```bash
+.venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
+  --transcript-source asr \
+  --asr-backend auto \
+  --language en-US \
+  --output-dir reports/local-video
+```
+
 ## YouTube Access Strategy
 
 This section is specifically for YouTube. It is not the general strategy for local files, Bilibili, or other `yt-dlp` sources.
@@ -129,30 +142,26 @@ yt-dlp --cookies-from-browser safari --no-playlist --list-subs --ignore-no-forma
 yt-dlp --cookies cookies.txt --no-playlist --list-subs --ignore-no-formats URL
 ```
 
-2. If cookies work but no captions exist, use a local audio/video file and run the normal ASR path:
-
-```bash
-.venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
---transcript-source asr \
---asr-backend auto \
---language en-US \
---output-dir reports/local-video
-```
-
+2. If cookies work but no captions exist, use a local audio/video file and run the normal ASR path.
 3. If YouTube exposes metadata but not playable media formats, try a small number of `yt-dlp` player/client diagnostics, then stop. Do not loop indefinitely trying random extractor settings.
 4. If extraction still returns only metadata or storyboard formats, ask for a copied transcript, a local media file, or a working exported `cookies.txt`. Only produce a metadata-only report when the user explicitly asks for one.
 
-Detailed YouTube diagnostics are in [skill/references/youtube-cookies-po-token.md](skill/references/youtube-cookies-po-token.md).
+Detailed YouTube diagnostics are in [skill/references/youtube-cookies-po-token.md](skill/references/youtube-cookies-po-token.md), and the hardened YouTube workflow is in [skill/references/youtube-video-report-hardening.md](skill/references/youtube-video-report-hardening.md).
 
-To force local ASR:
+## Stable Video Frame Capture
+
+`video_capture_frames.py` downloads URL video sources to a stable local MP4 before running `ffmpeg` frame extraction. This avoids fragile direct `googlevideo.com` signed URLs, TLS EOF failures, and expired streaming URLs during seek-heavy frame capture. The temporary video is deleted after frames are captured unless `--keep-video` is passed.
 
 ```bash
-.venv-nemotron/bin/python skill/scripts/video_report.py ./video.mp4 \
-  --transcript-source asr \
-  --asr-backend auto \
-  --language en-US \
-  --output-dir reports/local-video
+.venv-nemotron/bin/python skill/scripts/video_capture_frames.py \
+  reports/QggkUtXNkPo/visual/visual_manifest.json \
+  -o reports/QggkUtXNkPo/visual/visual_manifest.frames.json \
+  --frames-dir reports/QggkUtXNkPo/visual/frames \
+  --download-dir reports/QggkUtXNkPo/visual/source_video \
+  --overwrite
 ```
+
+Use `--keep-video` when you need an auditable local video artifact. Use `--no-download` only when you explicitly want the old direct-stream behavior.
 
 ## Final Report Pipeline
 
@@ -183,7 +192,7 @@ To force local ASR:
   --env-file skill/.env \
   --analysis-language auto
 
-# 5. Compose the final reader-facing Markdown, HTML, and PDF.
+# 5. Compose final reader-facing Markdown, HTML, and PDF.
 .venv-nemotron/bin/python skill/scripts/video_compose_final_report.py \
   reports/QggkUtXNkPo/QggkUtXNkPo.json \
   reports/QggkUtXNkPo/visual/visual_manifest.vision.json \
@@ -196,6 +205,20 @@ To force local ASR:
 
 Use `--report-language en`, `--report-language zh-CN`, or another language tag to force the final report language. The composer validates obvious language mismatches and retries once when provider output ignores the requested language.
 
+## Render Existing Markdown
+
+Use `video_render_markdown.py` when you already have a Markdown report or fact-check addendum and only need robust HTML/PDF rendering. It reuses the skill renderer so tables, images, bold text, inline code, and relative image paths survive the HTML/PDF step.
+
+```bash
+.venv-nemotron/bin/python skill/scripts/video_render_markdown.py \
+  reports/QggkUtXNkPo/visual/report.md \
+  --html reports/QggkUtXNkPo/visual/report.html \
+  --pdf reports/QggkUtXNkPo/visual/report.pdf \
+  --title "QggkUtXNkPo Report"
+```
+
+For report quality checks, see [skill/references/report-quality-pitfalls.md](skill/references/report-quality-pitfalls.md).
+
 ## Hermes CLI
 
 Install the skill:
@@ -205,16 +228,16 @@ mkdir -p ~/.hermes/skills/media
 rsync -a skill/ ~/.hermes/skills/media/video-report-nemotron/
 ```
 
-Then ask Hermes for the final report:
+Ask Hermes for a final report:
 
 ```text
 Use video-report-nemotron to analyze https://www.youtube.com/watch?v=QggkUtXNkPo.
-Generate the final Markdown, HTML, and PDF report in Simplified Chinese.
+Generate final Markdown, HTML, and PDF report in Simplified Chinese.
 ```
 
 ## Hermes Desktop
 
-Hermes Desktop can use the same skill if it is installed into the desktop backend's active `HERMES_HOME`.
+Hermes Desktop can use the same skill if installed into the desktop backend's active `HERMES_HOME`.
 
 For the default local home:
 
@@ -233,7 +256,7 @@ https://www.youtube.com/watch?v=QggkUtXNkPo
 
 Generate a rich final report with appropriate images.
 Output Markdown, HTML, and PDF.
-Force the report language to English.
+Force report language English.
 ```
 
 ## Testing
@@ -242,11 +265,11 @@ Force the report language to English.
 .venv-nemotron/bin/python -m pytest skill/tests
 ```
 
-The tests cover subtitle source behavior, Nemotron-only backend selection, language forcing, visual manifest selection, environment loading, report composition, and Markdown-to-HTML rendering for PDF output.
+Tests cover subtitle source behavior, Nemotron-only backend selection, language forcing, visual manifest selection, environment loading, report composition, and Markdown-to-HTML/PDF rendering behavior.
 
 ## Security Notes
 
 - Real `.env` files are ignored.
 - Media downloads and normalized audio/video files are ignored.
 - The example report is included as a small reproducible artifact; raw downloaded media and model weights are not committed.
-- Public video content may still be subject to the source platform's terms and copyright. Use the tool on content you are allowed to process.
+- Public video content may still be subject to source platform terms and copyright. Use this tool only on content you are allowed to process.
