@@ -4,19 +4,19 @@ Use this reference when a YouTube report must include real video-backed visual e
 
 ## Required artifact root
 
-On Glu Tri's machine, default durable outputs to the mounted drive:
+Default durable outputs to a single configured artifact root:
 
 ```text
-/Volumes/SN770Coder/Data/video_reports/<video-id-or-slug>/
+VIDEO_REPORT_OUTPUT_ROOT/<video-id-or-slug>/
 ```
 
-Keep generated reports, downloaded media, extracted audio, normalized ASR audio, frames, OCR, vision manifests, and diagnostics there unless the user explicitly asks for another location. Avoid creating new report artifacts under `~/video_reports`.
+Keep generated reports, downloaded media, extracted audio, normalized ASR audio, frames, OCR, vision manifests, and diagnostics there unless the user explicitly asks for another location. If `VIDEO_REPORT_OUTPUT_ROOT` is not configured, use the project-local `./video-report-output/<source-slug>/` default. Avoid scattering artifacts across home directories or the skill source tree.
 
 ## Download validation pattern
 
 A report that claims visual evidence must have a real video file or local user-provided media. Audio-only downloads are not enough.
 
-1. Download video+audio directly to the mounted-drive report directory.
+1. Download video+audio directly to the report artifact directory.
 2. Verify with `ffprobe` or equivalent metadata checks:
    - at least one video stream;
    - at least one audio stream when speech is needed;
@@ -45,7 +45,7 @@ uvx --from yt-dlp --with bgutil-ytdlp-pot-provider --with curl-cffi yt-dlp \
   --extractor-args 'youtube:player_client=mweb,web_creator' \
   -f 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/best[height<=720][ext=mp4]/18/best[height<=720]' \
   --merge-output-format mp4 \
-  -o '/Volumes/SN770Coder/Data/video_reports/<id>/video/source_video.%(ext)s' \
+  -o '${VIDEO_REPORT_OUTPUT_ROOT}/<id>/video/source_video.%(ext)s' \
   'YOUTUBE_URL'
 ```
 
@@ -53,7 +53,7 @@ Treat this as a validated pattern, not a permanent one-size-fits-all command. Ad
 
 ## Temporary video policy
 
-Default behavior for generic URL frame capture is temporary video download plus cleanup after frames are captured. If the user explicitly asks to retain the video or asks to prove downloadability, keep the video under the mounted-drive report directory and report its path.
+Default behavior for generic URL frame capture is temporary video download plus cleanup after frames are captured. If the user explicitly asks to retain the video or asks to prove downloadability, keep the video under the report artifact directory and report its path.
 
 ## Visual evidence workflow
 

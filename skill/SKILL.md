@@ -20,7 +20,7 @@ Hard invariant for URL videos: if the user asks for a report rather than a trans
 
 Hard invariant for rendering: never hand-roll Markdown-to-HTML/PDF with ad hoc paragraph splitting. Use `video_compose_final_report.py` for composed reports, `video_build_visual_report.py` for visual audit reports, or `video_render_markdown.py` for existing Markdown. These renderers preserve tables, `**bold**`, links, lists, code blocks, and images. If a PDF fallback is needed, render Markdown to HTML first with `video_render_markdown.py`, then let its Playwright/`uvx --from playwright` fallback make the PDF.
 
-Output-root invariant on this machine: keep generated reports, downloaded media, extracted audio, normalized ASR audio, frames, OCR, and diagnostics under the mounted drive by default: `/Volumes/SN770Coder/Data/video_reports/<video-id-or-slug>/`. `video_report.py` defaults to `VIDEO_REPORT_OUTPUT_ROOT/<source-slug>` when `VIDEO_REPORT_OUTPUT_ROOT` is set, otherwise `/Volumes/SN770Coder/Data/video_reports/<source-slug>` when that drive is mounted. Do not write new report artifacts under `~/video_reports` unless the user explicitly asks.
+Output-root invariant: keep generated reports, downloaded media, extracted audio, normalized ASR audio, frames, OCR, and diagnostics under one explicit artifact root. `video_report.py` defaults to `VIDEO_REPORT_OUTPUT_ROOT/<source-slug>` when `VIDEO_REPORT_OUTPUT_ROOT` is set, otherwise `./video-report-output/<source-slug>`. For local operator installs, set `VIDEO_REPORT_OUTPUT_ROOT` in the local `.env` if reports should live on a durable data volume.
 
 ## Setup
 
@@ -83,7 +83,7 @@ python3 SKILL_DIR/scripts/video_report.py "https://www.youtube.com/watch?v=VIDEO
   --transcript-source auto \
   --asr-backend auto \
   --language zh-CN \
-  --output-dir /Volumes/SN770Coder/Data/video_reports/VIDEO_ID
+  --output-dir ./video-report-output/VIDEO_ID
 ```
 
 Do not pass `--model small` or force Whisper-family models.
@@ -142,10 +142,6 @@ python3 SKILL_DIR/scripts/video_render_markdown.py visual/factcheck.md \
   --html visual/factcheck.html \
   --pdf visual/factcheck.pdf
 ```
-
-Read `visual_manifest.json` before capture when accuracy matters. It is valid to edit `needs_video`, `priority`, `visual_questions`, and `sampling.times` manually or with an LLM. The invariant is: visual capture follows reviewed block annotations, not direct keyword matching.
-
-Read `references/report-quality-pitfalls.md` when producing user-facing reports. It captures hard lessons about visual evidence, temporary video cleanup, Markdown/PDF legibility, and finance/economics fact-checking.
 
 Read `visual_manifest.json` before capture when accuracy matters. It is valid to edit `needs_video`, `priority`, `visual_questions`, and `sampling.times` manually or with an LLM. The invariant is: visual capture follows reviewed block annotations, not direct keyword matching.
 

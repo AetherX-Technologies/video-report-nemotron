@@ -212,8 +212,8 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         default=None,
         help=(
-            "Directory for report artifacts. Defaults to VIDEO_REPORT_OUTPUT_ROOT/source-slug, "
-            "or /Volumes/SN770Coder/Data/video_reports/source-slug when that mounted drive exists."
+            "Directory for report artifacts. Defaults to VIDEO_REPORT_OUTPUT_ROOT/source-slug "
+            "when set, otherwise ./video-report-output/source-slug."
         ),
     )
     parser.add_argument(
@@ -262,9 +262,6 @@ def default_output_root() -> Path:
     configured = os.environ.get("VIDEO_REPORT_OUTPUT_ROOT")
     if configured:
         return Path(configured).expanduser()
-    mounted_root = Path("/Volumes/SN770Coder/Data/video_reports")
-    if mounted_root.parent.exists():
-        return mounted_root
     return Path("video-report-output")
 
 

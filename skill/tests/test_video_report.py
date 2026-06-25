@@ -161,6 +161,19 @@ def test_candidate_python_executables_include_nearby_project_venvs(monkeypatch, 
     assert script_root / ".venv-nemotron" / "bin" / "python" in candidates
 
 
+def test_default_output_root_uses_env(monkeypatch, tmp_path):
+    report_root = tmp_path / "video_reports"
+    monkeypatch.setenv("VIDEO_REPORT_OUTPUT_ROOT", str(report_root))
+
+    assert video_report.default_output_root() == report_root
+
+
+def test_default_output_root_falls_back_to_repo_local(monkeypatch):
+    monkeypatch.delenv("VIDEO_REPORT_OUTPUT_ROOT", raising=False)
+
+    assert video_report.default_output_root() == Path("video-report-output")
+
+
 def test_parse_args_loads_env_file_defaults(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(

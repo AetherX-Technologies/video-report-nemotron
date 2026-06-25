@@ -10,6 +10,8 @@ __pycache__/
 !*.env.example
 
 # Downloaded or normalized media can be large and may be copyrighted.
+reports/
+video-report-output/
 *.wav
 *.aiff
 *.mp3
