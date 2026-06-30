@@ -18,6 +18,24 @@ Video Report Nemotron is a Hermes skill for turning video links or local media f
 - Can force the final output language independently from the source video language.
 - Runs in Hermes CLI and Hermes Desktop when installed into the active Hermes skills directory.
 
+## Optional Hermes Tweet Companion
+
+Video reports often need public social context around a source, speaker, launch,
+or audience reaction. The optional Hermes Tweet companion lets Hermes collect
+catalog-listed X/Twitter signals through Xquik before or after the subtitle-first
+report pipeline:
+
+```bash
+hermes plugins install Xquik-dev/hermes-tweet --enable
+mkdir -p ~/.hermes/skills/hermes-tweet
+rsync -a companions/hermes-tweet/ ~/.hermes/skills/hermes-tweet/
+hermes tools list
+```
+
+Use it for search, profile lookup, trend checks, and approved follow-up actions.
+Keep API keys in the Hermes runtime environment and keep writes gated by
+`HERMES_TWEET_ENABLE_ACTIONS=true`.
+
 ## Example Output
 
 This repository includes a generated report for a public YouTube video:
